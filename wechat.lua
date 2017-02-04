@@ -87,13 +87,23 @@ ngx.var.target = hosts_get[1]
 
 if match_url then
     local wechatid = match_url[1]
-    local ascii = 0
-    len = string.len(wechatid) 
-    for i = 1, len do
-        ascii = ascii + string.byte(wechatid, i)
+    target_url = get_wechatid_route(wechatid)
+    ngx.log(ngx.INFO, "--url: ", target_url)
+
+    if target_url ~= nil then
+        -- 如果存在，跳转到对应缓存中的url
+        ngx.var.target = target_url
+        ngx.log(ngx.INFO, "["..wechatid.."] ===> ", target_url)
+        --ngx.say("["..wechatid.."] ===> ", target_url)
+    else
+        local ascii = 0
+        len = string.len(wechatid) 
+        for i = 1, len do
+            ascii = ascii + string.byte(wechatid, i)
+        end
+        mod = ascii % table.getn(hosts_get) + 1
+        ngx.var.target = hosts_get[mod]
     end
-    mod = ascii % table.getn(hosts_get) + 1
-    ngx.var.target = hosts_get[mod]
 elseif request_method == "POST" then 
     ngx.req.read_body()
 
