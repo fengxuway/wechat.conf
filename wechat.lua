@@ -103,6 +103,7 @@ if match_url then
         end
         mod = ascii % table.getn(hosts_get) + 1
         ngx.var.target = hosts_get[mod]
+        ngx.log(ngx.INFO, "["..wechatid.."] ===> ", hosts_get[mod])
     end
 elseif request_method == "POST" then 
     ngx.req.read_body()
@@ -168,6 +169,7 @@ elseif request_method == "POST" then
         end
     else
         ngx.var.target = hosts_post[1]
+        ngx.log(ngx.INFO, "["..username.."] ===> ", hosts_post[1])
     end
 elseif api_match_url then
     ngx.log(ngx.INFO, "API get wechatid bind URL")
@@ -181,4 +183,5 @@ elseif api_match_url then
     end
 else
     ngx.var.target = hosts_post[1]
+    ngx.log(ngx.INFO, "["..username.."] ===> ", hosts_post[1])
 end
