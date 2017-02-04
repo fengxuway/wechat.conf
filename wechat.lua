@@ -51,7 +51,7 @@ function get_wechatid_route(wechatid)
             local all_keys = red:keys(red_prefix.."*")
             for i, k in ipairs(all_keys) do
                 local v = red:get(k)
-                local sub_k = string.sub(k,string.len(red_prefix)+1, string.len(k)-1)
+                local sub_k = string.sub(k,string.len(red_prefix)+1, string.len(k))
                 set_to_cache(sub_k, v, expiretime)
             end
             red:close()
