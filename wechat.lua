@@ -222,7 +222,7 @@ elseif request_method == "POST" then
         end    
     else
         ngx.var.target = hosts_post[1]
-        ngx.log(ngx.INFO, "turn to ===> ", hosts_post[1])
+        ngx.log(ngx.INFO, "["..username.."] turn to ===> ", hosts_post[1])
     end
 elseif api_match_url then
     ngx.log(ngx.INFO, "API get wechatid bind URL")
@@ -237,4 +237,5 @@ elseif api_match_url then
     ngx.exit(200)
 else
     ngx.var.target = hosts_post[1]
+    ngx.log(ngx.INFO, "["..username.."] ===> ", hosts_post[1])
 end
