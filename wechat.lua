@@ -1,6 +1,16 @@
 local hosts_get = {'http://192.168.30.234:80'}
-local hosts_post = {'http://192.168.30.234:80'}
-local hosts_nginx = {'http://192.168.30.213', 'http://192.168.31.245'}
+local hosts_post = {'http://1.1.1.1', 'http://2.2.2.2', 'http://3.3.3.3','http://4.4.4.4'}
+local hosts_nginx = {'http://10.0.0.120', 'http://10.0.0.122'}
+
+local redis_server = '192.168.30.48'
+local redis_port = 6379
+local redis_password = 'rediS'
+
+-- redis缓存的时间 200秒，线上一小时零5分钟，也就是4000秒
+local expiretime_redis = 4000
+-- openresty的缓存时间60秒，线上一年, 约等于2592000
+local expiretime = 1000     
+
 
 
 function get_from_cache(key)
@@ -13,8 +23,16 @@ function set_to_cache(key, value, exptime)
     if not exptime then
         exptime = 0
     end
+    
     local cache_ngx = ngx.shared.openids
     local succ, err, forcible = cache_ngx:set(key, value, exptime)
+    return succ
+end
+
+function delete_from_cache(key)
+    local cache_ngx = ngx.shared.openids
+    local succ, err, forcible = cache_ngx:delete(key)
+    ngx.log(ngx.INFO, "delete_from_cache", key)
     return succ
 end
 
@@ -22,16 +40,26 @@ function get_keys()
     return ngx.shared.openids:get_keys()
 end
 
+function ascii_count(wechatid)
+    -- 计算一个字符串的每个字符串ascii总和，以便于随机
+    local ascii = 0
+    len = string.len(wechatid) 
+    for i = 1, len do
+        ascii = ascii + string.byte(wechatid, i)
+    end
+    return ascii
+end
+
 function redis_connect()
     local redis = require "resty.redis"
     local red = redis:new()
     red:set_timeout(1000)
-    local ok, err = red:connect("127.0.0.1", 6374)
+    local ok, err = red:connect(redis_server, redis_port)
     if not ok then
         ngx.log(ngx.ERR, "failed to connect: ", err)
         return
     end
-    local res, err = red:auth("rediS")
+    local res, err = red:auth(redis_password)
     if not res then
         ngx.log(ngx.ERR, "failed to authenticate: ", err)
         return
@@ -40,10 +68,6 @@ function redis_connect()
 end
 -- redis中key的前缀
 local red_prefix = "openresty_openid_"
--- redis缓存的时间 200秒，线上一小时零5分钟
-local expiretime_redis = 4000
--- openresty的缓存时间60秒，线上16分钟
-local expiretime = 1000     
 function get_wechatid_route(wechatid)
     ngx.log(ngx.INFO, "get_wechatid_route: [",wechatid,"]")
     url = get_from_cache(wechatid)
@@ -137,6 +161,11 @@ elseif request_method == "POST" then
         local body = ngx.req.get_body_data()
         local cjson = require "cjson"
         local data = cjson.decode(body);
+        if data == nil then
+            -- 判断json格式是否有误
+            ngx.say("Json format error!")
+            ngx.exit(500)
+        end
 
         red = redis_connect()
 
@@ -159,14 +188,42 @@ elseif request_method == "POST" then
         return
     end
 
+    if uri == "/api/delete" then
+        ngx.log(ngx.INFO, "ready to delete cached data")
+        local body = ngx.req.get_body_data()
+        local cjson = require "cjson"
+        local data = cjson.decode(body);
+
+        red = redis_connect()
+
+        for i,v in ipairs(data["openids"]) do
+            delete_from_cache(v)
+            red:expire(red_prefix..v, 1)
+        end
+        red:close()
+
+        sync(body)
+
+        ngx.log(ngx.INFO, "Push Success")
+        ngx.say("Push success!")
+        ngx.exit(200)
+        return
+    end
+
     if uri == "/api/sync" then
         local body = ngx.req.get_body_data()
         ngx.log(ngx.INFO, body)
         local cjson = require "cjson"
         local data = cjson.decode(body);
         for i,v in ipairs(data["openids"]) do
-            set_to_cache(v, data["url"], expiretime)
-            ngx.log(ngx.INFO, v, data['url'])
+            if data['url'] ~= nil then
+                set_to_cache(v, data["url"], expiretime)
+                ngx.log(ngx.INFO, 'synced', v, data['url'])
+            else
+                delete_from_cache(v)
+                ngx.log(ngx.INFO, 'synced', v, 'deleted')
+            end
+            
         end
         ngx.exit(200)
         return
@@ -190,7 +247,7 @@ elseif request_method == "POST" then
         ngx.log(ngx.INFO, "--wechatid: ", wechatid)
 
         -- 查找缓存中的wechatid是否存在
-        target_url = get_wechatid_route(wechatid)
+        local target_url = get_wechatid_route(wechatid)
         ngx.log(ngx.INFO, "--url: ", target_url)
 
         
@@ -220,6 +277,33 @@ elseif request_method == "POST" then
                 
             end
         end    
+    elseif string.find(uri, '/agent/weibo') then
+        ngx.log(ngx.INFO, "微博请求")
+        -- 微博接口，判断/agent/weibo 将请求体json中的receiver_id 按缓存对应到VPC地址中
+        -- 如果receiver_id不在缓存中，按sender_id的ASCII值随机到不同的节点上
+        local cjson = require "cjson"
+        local data_json = cjson.decode(data);
+        if data_json == nil then
+            -- 判断json格式是否有误
+            -- 如果有误，直接跳转到hosts_post[1]
+            ngx.log(ngx.WARN, "Json format error!", data)
+            ngx.var.target = hosts_post[1]
+            ngx.log(ngx.INFO, "["..username.."] turn to ===> ", hosts_post[1])
+        else
+            local target_url = get_wechatid_route(data_json['receiver_id'])
+            if target_url ~= nil then
+                -- 如果存在，跳转到对应缓存中的url
+                ngx.var.target = target_url
+                ngx.log(ngx.INFO, "["..data_json['receiver_id'].."] ===> ", target_url)
+                --ngx.say("["..wechatid.."] ===> ", target_url)
+            else
+                local sender_ascii = ascii_count(data_json['sender_id'])
+                local mod = sender_ascii % table.getn(hosts_post) + 1
+                ngx.var.target = hosts_post[mod]
+                ngx.log(ngx.INFO, "["..data_json['receiver_id'].."] ===> ", hosts_post[mod])
+            end
+        end
+
     else
         ngx.var.target = hosts_post[1]
         ngx.log(ngx.INFO, "["..username.."] turn to ===> ", hosts_post[1])
@@ -239,3 +323,4 @@ else
     ngx.var.target = hosts_post[1]
     ngx.log(ngx.INFO, "["..username.."] ===> ", hosts_post[1])
 end
+
