@@ -2,7 +2,7 @@ local hosts_get = {'http://192.168.30.234:80'}
 local hosts_post = {'http://1.1.1.1', 'http://2.2.2.2', 'http://3.3.3.3','http://4.4.4.4'}
 local hosts_nginx = {'http://10.0.0.120', 'http://10.0.0.122'}
 
-local redis_server = '192.168.30.48'
+local redis_server = '192.168.90.4'
 local redis_port = 6379
 local redis_password = 'rediS'
 
@@ -232,9 +232,35 @@ elseif request_method == "POST" then
     local data = ngx.req.get_body_data()
     local regex_body = [[<FromUserName>(.*?)</FromUserName>]]
     local touser_regex_body = [[<ToUserName>(.*?)</ToUserName>]]
+    local regex_weixin_sdk = [[/agent/weixin.*?[&\?]openid=([\w-]+)]]
+
     local match_body = ngx.re.match(data, regex_body, "o")
     local touser_match_body = ngx.re.match(data, touser_regex_body, "o")
-    if touser_match_body then
+
+    local match_weixin_sdk = ngx.re.match(uri, regex_weixin_sdk, "o")
+
+    if match_weixin_sdk then
+        -- 2017-08-08 新增，如果url包含/agent/weixin 并且有openid参数，直接根据openid的值路由
+
+        local wechatid = match_weixin_sdk[1]
+        ngx.log(ngx.INFO, "--wechatid: ", wechatid)
+
+        -- 查找缓存中的wechatid是否存在        
+        local target_url = get_wechatid_route(wechatid)
+        if target_url ~= nil then
+            -- 如果存在，跳转到对应缓存中的url
+            ngx.var.target = target_url
+            ngx.log(ngx.INFO, "["..wechatid.."] ===> ", target_url)
+            --ngx.say("["..wechatid.."] ===> ", target_url)
+        else
+            local sender_ascii = ascii_count(wechatid)
+            local mod = sender_ascii % table.getn(hosts_post) + 1
+            ngx.var.target = hosts_post[mod]
+            ngx.log(ngx.INFO, "["..wechatid.."] ===> ", hosts_post[mod])
+        end
+
+    
+    elseif touser_match_body then
         username = touser_match_body[1]
         -- 如果username被CDATA包裹，则获取其内部的wechatid
         local match_wechatid = ngx.re.match(username, [[<!\[CDATA\[([\w-]+)\]\]>]], "o")
