@@ -239,28 +239,7 @@ elseif request_method == "POST" then
 
     local match_weixin_sdk = ngx.re.match(uri, regex_weixin_sdk, "o")
 
-    if match_weixin_sdk then
-        -- 2017-08-08 新增，如果url包含/agent/weixin 并且有openid参数，直接根据openid的值路由
-
-        local wechatid = match_weixin_sdk[1]
-        ngx.log(ngx.INFO, "--wechatid: ", wechatid)
-
-        -- 查找缓存中的wechatid是否存在        
-        local target_url = get_wechatid_route(wechatid)
-        if target_url ~= nil then
-            -- 如果存在，跳转到对应缓存中的url
-            ngx.var.target = target_url
-            ngx.log(ngx.INFO, "["..wechatid.."] ===> ", target_url)
-            --ngx.say("["..wechatid.."] ===> ", target_url)
-        else
-            local sender_ascii = ascii_count(wechatid)
-            local mod = sender_ascii % table.getn(hosts_post) + 1
-            ngx.var.target = hosts_post[mod]
-            ngx.log(ngx.INFO, "["..wechatid.."] ===> ", hosts_post[mod])
-        end
-
-    
-    elseif touser_match_body then
+    if touser_match_body then
         username = touser_match_body[1]
         -- 如果username被CDATA包裹，则获取其内部的wechatid
         local match_wechatid = ngx.re.match(username, [[<!\[CDATA\[([\w-]+)\]\]>]], "o")
@@ -284,7 +263,40 @@ elseif request_method == "POST" then
             --ngx.say("["..wechatid.."] ===> ", target_url)
         else
             ngx.log(ngx.WARN, "wechatid ["..wechatid.."] not in Cache!")
-            if match_body then
+
+            if match_weixin_sdk then
+                -- 2017-08-08 新增，如果url包含/agent/weixin 并且有openid参数，直接根据openid的值路由
+
+                local wechatid = match_weixin_sdk[1]
+                ngx.log(ngx.INFO, "SDK request --wechatid: ", wechatid)
+
+                -- 查找缓存中的wechatid是否存在        
+                local target_url = get_wechatid_route(wechatid)
+                if target_url ~= nil then
+                    -- 如果存在，跳转到对应缓存中的url
+                    ngx.var.target = target_url
+                    ngx.log(ngx.INFO, "["..wechatid.."] ===> ", target_url)
+                    --ngx.say("["..wechatid.."] ===> ", target_url)
+                elseif match_body then
+                    username = match_body[1]
+                    ngx.log(ngx.WARN, "wechatid ["..wechatid.."] not in Cache!")
+                    ngx.log(ngx.WARN, "According to FromUserName ["..username.."] Ascii code to random!")
+                    -- 缓存中不存在指定wechatid，则执行原来的逻辑
+                    local ascii = 0
+                    len = string.len(username) 
+                    for i = 1, len do
+                        ascii = ascii + string.byte(username, i)
+                    end
+                    mod = ascii % table.getn(hosts_post) + 1
+                    ngx.var.target = hosts_post[mod]
+                    ngx.log(ngx.INFO, "["..username.."] ===> ", hosts_post[mod])
+                else
+                    ngx.var.target = hosts_post[1]
+                    ngx.log(ngx.INFO, "["..username.."] ===> ", hosts_post[mod])
+                    
+                end
+
+            elseif match_body then
                 username = match_body[1]
                 ngx.log(ngx.WARN, "wechatid ["..wechatid.."] not in Cache!")
                 ngx.log(ngx.WARN, "According to FromUserName ["..username.."] Ascii code to random!")
