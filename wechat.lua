@@ -74,7 +74,7 @@ function get_wechatid_route(wechatid)
     if url == nil then
         ngx.log(ngx.WARN, "openresty cache not found")
         if table.getn(get_keys()) == 0 then
-
+    
             ngx.log(ngx.INFO, "load from redis...")
             red = redis_connect()
             local all_keys = red:keys(red_prefix.."*")
@@ -93,7 +93,7 @@ function get_wechatid_route(wechatid)
     else
         return url
     end
-    
+
 end
 
 
@@ -114,7 +114,7 @@ function sync(body)
         end
     end
 end
-       
+​       
 
 local request_method = ngx.var.request_method
 
@@ -136,7 +136,7 @@ if match_url then
     local wechatid = match_url[1]
     target_url = get_wechatid_route(wechatid)
     ngx.log(ngx.INFO, "--url: ", target_url)
-
+    
     if target_url ~= nil then
         -- 如果存在，跳转到对应缓存中的url
         ngx.var.target = target_url
@@ -166,9 +166,9 @@ elseif request_method == "POST" then
             ngx.say("Json format error!")
             ngx.exit(500)
         end
-
+    
         red = redis_connect()
-
+    
         for i,v in ipairs(data["openids"]) do
             set_to_cache(v, data["url"], expiretime)
             local res, err = red:set(red_prefix..v, data["url"])
@@ -179,37 +179,37 @@ elseif request_method == "POST" then
             red:expire(red_prefix..v, expiretime_redis)
         end
         red:close()
-
+    
         sync(body)
-
+    
         ngx.log(ngx.INFO, "Push Success")
         ngx.say("Push success!")
         ngx.exit(200)
         return
     end
-
+    
     if uri == "/api/delete" then
         ngx.log(ngx.INFO, "ready to delete cached data")
         local body = ngx.req.get_body_data()
         local cjson = require "cjson"
         local data = cjson.decode(body);
-
+    
         red = redis_connect()
-
+    
         for i,v in ipairs(data["openids"]) do
             delete_from_cache(v)
             red:expire(red_prefix..v, 1)
         end
         red:close()
-
+    
         sync(body)
-
+    
         ngx.log(ngx.INFO, "Push Success")
         ngx.say("Push success!")
         ngx.exit(200)
         return
     end
-
+    
     if uri == "/api/sync" then
         local body = ngx.req.get_body_data()
         ngx.log(ngx.INFO, body)
@@ -228,17 +228,17 @@ elseif request_method == "POST" then
         ngx.exit(200)
         return
     end
-
+    
     local data = ngx.req.get_body_data()
     local regex_body = [[<FromUserName>(.*?)</FromUserName>]]
     local touser_regex_body = [[<ToUserName>(.*?)</ToUserName>]]
     local regex_weixin_sdk = [[/agent/weixin.*?[&\?]openid=([\w-]+)]]
-
+    
     local match_body = ngx.re.match(data, regex_body, "o")
     local touser_match_body = ngx.re.match(data, touser_regex_body, "o")
-
+    
     local match_weixin_sdk = ngx.re.match(uri, regex_weixin_sdk, "o")
-
+    
     if touser_match_body then
         username = touser_match_body[1]
         -- 如果username被CDATA包裹，则获取其内部的wechatid
@@ -250,12 +250,12 @@ elseif request_method == "POST" then
             wechatid = username
         end
         ngx.log(ngx.INFO, "--wechatid: ", wechatid)
-
+    
         -- 查找缓存中的wechatid是否存在
         local target_url = get_wechatid_route(wechatid)
         ngx.log(ngx.INFO, "--url: ", target_url)
 
-        
+
         if target_url ~= nil then
             -- 如果存在，跳转到对应缓存中的url
             ngx.var.target = target_url
@@ -263,13 +263,13 @@ elseif request_method == "POST" then
             --ngx.say("["..wechatid.."] ===> ", target_url)
         else
             ngx.log(ngx.WARN, "wechatid ["..wechatid.."] not in Cache!")
-
+    
             if match_weixin_sdk then
                 -- 2017-08-08 新增，如果url包含/agent/weixin 并且有openid参数，直接根据openid的值路由
-
+    
                 local wechatid = match_weixin_sdk[1]
                 ngx.log(ngx.INFO, "SDK request --wechatid: ", wechatid)
-
+    
                 -- 查找缓存中的wechatid是否存在        
                 local target_url = get_wechatid_route(wechatid)
                 if target_url ~= nil then
@@ -295,7 +295,7 @@ elseif request_method == "POST" then
                     ngx.log(ngx.INFO, "["..username.."] ===> ", hosts_post[mod])
                     
                 end
-
+    
             elseif match_body then
                 username = match_body[1]
                 ngx.log(ngx.WARN, "wechatid ["..wechatid.."] not in Cache!")
@@ -341,7 +341,7 @@ elseif request_method == "POST" then
                 ngx.log(ngx.INFO, "["..data_json['receiver_id'].."] ===> ", hosts_post[mod])
             end
         end
-
+    
     else
         ngx.var.target = hosts_post[1]
         ngx.log(ngx.INFO, "[ default 309 ] turn to ===> ", hosts_post[1])

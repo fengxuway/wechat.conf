@@ -17,19 +17,19 @@
 lua_shared_dict openids 128m;
 ```
 3、将wechat.conf和wechat.lua文件放置到$OPENRESTY_HOME/nginx/conf/conf.d/目录下
-4、修改wechat.lua脚本中的redis配置
-redis 相关配置见wechat.lua脚本第24-30行：
+4、`wechat.lua`脚本前6行请修改为线上环境对应地址，如下：
+
 ```lua
-local ok, err = red:connect("REDIS服务ip", 端口)
-if not ok then
-    ngx.log(ngx.ERR, "failed to connect: ", err)
-    return
-end
-local res, err = red:auth("密码")
-if not res then
-    ngx.log(ngx.ERR, "failed to authenticate: ", err)
-    return
-end
+local hosts_get = {'http://10.44.48.214:8080'}
+-- 默认post请求的数组
+local hosts_post = {'http://10.173.27.48:81', 'http://10.171.77.147:81', 'http://10.44.45.145:80', 'http://10.173.27.48:80', 'http://10.171.77.147:80', 'http://10.44.45.145:81'}
+-- 多个openresty的实例
+local hosts_nginx = {'http://10.46.174.210', 'http://10.46.174.126'}
+
+-- redis配置
+local redis_server = "10.46.174.210"
+local redis_port = 6374
+local redis_password = "rediS"
 ```
 
 
