@@ -114,7 +114,6 @@ function sync(body)
         end
     end
 end
-​       
 
 local request_method = ngx.var.request_method
 
