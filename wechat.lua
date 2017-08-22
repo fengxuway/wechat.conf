@@ -240,7 +240,7 @@ elseif request_method == "POST" then
     local match_weixin_sdk = ngx.re.match(uri, regex_weixin_sdk, "o")
     
     if touser_match_body then
-        username = touser_match_body[1]
+        local username = touser_match_body[1]
         -- 如果username被CDATA包裹，则获取其内部的wechatid
         local match_wechatid = ngx.re.match(username, [[<!\[CDATA\[([\w-]+)\]\]>]], "o")
         local wechatid = nil
@@ -326,7 +326,7 @@ elseif request_method == "POST" then
             -- 如果有误，直接跳转到hosts_post[1]
             ngx.log(ngx.WARN, "Json format error!", data)
             ngx.var.target = hosts_post[1]
-            ngx.log(ngx.INFO, "["..username.."] turn to ===> ", hosts_post[1])
+            ngx.log(ngx.INFO, "[ weibo default ] turn to ===> ", hosts_post[1])
         else
             local target_url = get_wechatid_route(data_json['receiver_id'])
             if target_url ~= nil then
