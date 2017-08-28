@@ -1,8 +1,8 @@
 local hosts_get = {'http://192.168.30.234:80'}
 local hosts_post = {'http://1.1.1.1', 'http://2.2.2.2', 'http://3.3.3.3','http://4.4.4.4'}
-local hosts_nginx = {'http://10.0.0.120', 'http://10.0.0.122'}
+local hosts_nginx = {'http://10.0.0.120', 'http://10.0.0.121'}
 
-local redis_server = '192.168.90.4'
+local redis_server = '192.168.90.223'
 local redis_port = 6379
 local redis_password = 'rediS'
 
@@ -48,6 +48,17 @@ function ascii_count(wechatid)
         ascii = ascii + string.byte(wechatid, i)
     end
     return ascii
+end
+
+function json_decode(str)
+    -- 异常捕获 json解析
+    local cjson = require "cjson"
+    local data = nil
+    _, err = pcall(function(str) return cjson.decode(str) end, str)
+    if _ then
+        return err
+    end
+    return nil
 end
 
 function redis_connect()
@@ -120,100 +131,77 @@ local request_method = ngx.var.request_method
 local uri = ngx.var.request_uri
 --ngx.say(uri)
 ngx.log(ngx.ERR, uri)
-local regex_url = [[/callback/(\w+)]]
-local match_url = ngx.re.match(uri, regex_url, "o")
-
-local api_regex_url = [[/api/openid/(\w+)]]
-local api_match_url = ngx.re.match(uri, api_regex_url, "o")
 
 ngx.var.target = hosts_get[1]
 
-
-
-if match_url then
-
-    local wechatid = match_url[1]
-    target_url = get_wechatid_route(wechatid)
-    ngx.log(ngx.INFO, "--url: ", target_url)
-    
-    if target_url ~= nil then
-        -- 如果存在，跳转到对应缓存中的url
-        ngx.var.target = target_url
-        ngx.log(ngx.INFO, "["..wechatid.."] ===> ", target_url)
-    else
-        local ascii = 0
-        len = string.len(wechatid) 
-        for i = 1, len do
-            ascii = ascii + string.byte(wechatid, i)
-        end
-        mod = ascii % table.getn(hosts_get) + 1
-        ngx.var.target = hosts_get[mod]
-        ngx.log(ngx.INFO, "["..wechatid.."] ===> ", hosts_get[mod])
-    end
-elseif request_method == "POST" then 
+if request_method == "POST" then
+    -- 如果是POST请求，尝试读取body，提高ngx.req.get_body_data()获取请求体的成功率
     ngx.req.read_body()
+end
 
-    ngx.log(ngx.INFO, "POST data comming")
-    -- 获取各个vpc推送上来的json数据，并写入缓存和redis中
-    if uri == "/api/push" then
-        ngx.log(ngx.INFO, "ready to push data")
-        local body = ngx.req.get_body_data()
-        local cjson = require "cjson"
-        local data = cjson.decode(body);
-        if data == nil then
-            -- 判断json格式是否有误
-            ngx.say("Json format error!")
-            ngx.exit(500)
-        end
-    
-        red = redis_connect()
-    
-        for i,v in ipairs(data["openids"]) do
-            set_to_cache(v, data["url"], expiretime)
-            local res, err = red:set(red_prefix..v, data["url"])
-            if not res then
-                ngx.log(ngx.ERR, "failed to set: ", err)
-                return
-            end
-            red:expire(red_prefix..v, expiretime_redis)
-        end
-        red:close()
-    
-        sync(body)
-    
-        ngx.log(ngx.INFO, "Push Success")
-        ngx.say("Push success!")
-        ngx.exit(200)
-        return
+----------------------------- api相关 start ----------------------------
+
+-- 获取各个vpc推送上来的json数据，并写入缓存和redis中
+if uri == "/api/push" then
+    ngx.log(ngx.INFO, "ready to push data")
+    local body = ngx.req.get_body_data()
+    local data = json_decode(body)
+    if data == nil then
+        -- 判断json格式是否有误
+        ngx.say("Json format error!")
+        ngx.exit(500)
     end
-    
-    if uri == "/api/delete" then
-        ngx.log(ngx.INFO, "ready to delete cached data")
-        local body = ngx.req.get_body_data()
-        local cjson = require "cjson"
-        local data = cjson.decode(body);
-    
+
+    red = redis_connect()
+
+    for i,v in ipairs(data["openids"]) do
+        set_to_cache(v, data["url"], expiretime)
+        local res, err = red:set(red_prefix..v, data["url"])
+        if not res then
+            ngx.log(ngx.ERR, "failed to set: ", err)
+            return
+        end
+        red:expire(red_prefix..v, expiretime_redis)
+    end
+    red:close()
+
+    sync(body)
+
+    ngx.log(ngx.INFO, "Push Success")
+    ngx.say("Push success!")
+    ngx.exit(200)
+    return
+end
+
+if uri == "/api/delete" then
+    ngx.log(ngx.INFO, "ready to delete cached data")
+    local body = ngx.req.get_body_data()
+    local data = json_decode(body)
+    if data ~= nil then
         red = redis_connect()
-    
+
         for i,v in ipairs(data["openids"]) do
             delete_from_cache(v)
             red:expire(red_prefix..v, 1)
         end
         red:close()
-    
+
         sync(body)
-    
+
         ngx.log(ngx.INFO, "Push Success")
         ngx.say("Push success!")
-        ngx.exit(200)
-        return
+    else
+        ngx.say("Push Error! 请求体格式异常")
     end
-    
-    if uri == "/api/sync" then
-        local body = ngx.req.get_body_data()
-        ngx.log(ngx.INFO, body)
-        local cjson = require "cjson"
-        local data = cjson.decode(body);
+    ngx.exit(200)
+    return
+end
+
+if uri == "/api/sync" then
+    local body = ngx.req.get_body_data()
+    ngx.log(ngx.INFO, body)
+    local data = json_decode(body)
+    if data ~= nil then
         for i,v in ipairs(data["openids"]) do
             if data['url'] ~= nil then
                 set_to_cache(v, data["url"], expiretime)
@@ -224,20 +212,35 @@ elseif request_method == "POST" then
             end
             
         end
-        ngx.exit(200)
-        return
     end
-    
-    local data = ngx.req.get_body_data()
-    local regex_body = [[<FromUserName>(.*?)</FromUserName>]]
+    ngx.exit(200)
+    return
+end
+
+local api_regex_url = [[/api/openid/(\w+)]]
+local api_match_url = ngx.re.match(uri, api_regex_url, "o")
+if api_match_url then
+    ngx.log(ngx.INFO, "API get wechatid bind URL")
+    -- 提供api获取指定wechatid对应的路由url
+    local wechatid = api_match_url[1]
+    url = get_wechatid_route(wechatid)
+    if url == nil then
+        ngx.say("WechatID: ["..wechatid.."] Not found!")
+    else
+        ngx.say(url)
+    end
+    ngx.exit(200)
+end
+
+----------------------------- api相关 end ------------------------------
+
+----------------------------- 业务相关 start ----------------------------
+
+function resolve_body_touser(body)
+    -- 解析请求体中的ToUserName，如果缓存中存在则直接跳转
+    -- 否则返回false
     local touser_regex_body = [[<ToUserName>(.*?)</ToUserName>]]
-    local regex_weixin_sdk = [[/agent/weixin.*?[&\?]openid=([\w-]+)]]
-    
-    local match_body = ngx.re.match(data, regex_body, "o")
-    local touser_match_body = ngx.re.match(data, touser_regex_body, "o")
-    
-    local match_weixin_sdk = ngx.re.match(uri, regex_weixin_sdk, "o")
-    
+    local touser_match_body = ngx.re.match(body, touser_regex_body, "o")
     if touser_match_body then
         local username = touser_match_body[1]
         -- 如果username被CDATA包裹，则获取其内部的wechatid
@@ -260,102 +263,130 @@ elseif request_method == "POST" then
             ngx.var.target = target_url
             ngx.log(ngx.INFO, "["..wechatid.."] ===> ", target_url)
             --ngx.say("["..wechatid.."] ===> ", target_url)
-        else
-            ngx.log(ngx.WARN, "wechatid ["..wechatid.."] not in Cache!")
-    
-            if match_weixin_sdk then
-                -- 2017-08-08 新增，如果url包含/agent/weixin 并且有openid参数，直接根据openid的值路由
-    
-                local wechatid = match_weixin_sdk[1]
-                ngx.log(ngx.INFO, "SDK request --wechatid: ", wechatid)
-    
-                -- 查找缓存中的wechatid是否存在        
-                local target_url = get_wechatid_route(wechatid)
-                if target_url ~= nil then
-                    -- 如果存在，跳转到对应缓存中的url
-                    ngx.var.target = target_url
-                    ngx.log(ngx.INFO, "["..wechatid.."] ===> ", target_url)
-                    --ngx.say("["..wechatid.."] ===> ", target_url)
-                elseif match_body then
-                    username = match_body[1]
-                    ngx.log(ngx.WARN, "wechatid ["..wechatid.."] not in Cache!")
-                    ngx.log(ngx.WARN, "According to FromUserName ["..username.."] Ascii code to random!")
-                    -- 缓存中不存在指定wechatid，则执行原来的逻辑
-                    local ascii = 0
-                    len = string.len(username) 
-                    for i = 1, len do
-                        ascii = ascii + string.byte(username, i)
-                    end
-                    mod = ascii % table.getn(hosts_post) + 1
-                    ngx.var.target = hosts_post[mod]
-                    ngx.log(ngx.INFO, "["..username.."] ===> ", hosts_post[mod])
-                else
-                    ngx.var.target = hosts_post[1]
-                    ngx.log(ngx.INFO, "["..username.."] ===> ", hosts_post[mod])
-                    
-                end
-    
-            elseif match_body then
-                username = match_body[1]
-                ngx.log(ngx.WARN, "wechatid ["..wechatid.."] not in Cache!")
-                ngx.log(ngx.WARN, "According to FromUserName ["..username.."] Ascii code to random!")
-                -- 缓存中不存在指定wechatid，则执行原来的逻辑
-                local ascii = 0
-                len = string.len(username) 
-                for i = 1, len do
-                    ascii = ascii + string.byte(username, i)
-                end
-                mod = ascii % table.getn(hosts_post) + 1
-                ngx.var.target = hosts_post[mod]
-                ngx.log(ngx.INFO, "["..username.."] ===> ", hosts_post[mod])
-            else
-                ngx.var.target = hosts_post[1]
-                ngx.log(ngx.INFO, "["..username.."] ===> ", hosts_post[mod])
-                
-            end
-        end    
-    elseif string.find(uri, '/agent/weibo') then
-        ngx.log(ngx.INFO, "微博请求")
-        -- 微博接口，判断/agent/weibo 将请求体json中的receiver_id 按缓存对应到VPC地址中
-        -- 如果receiver_id不在缓存中，按sender_id的ASCII值随机到不同的节点上
-        local cjson = require "cjson"
-        local data_json = cjson.decode(data);
-        if data_json == nil then
-            -- 判断json格式是否有误
-            -- 如果有误，直接跳转到hosts_post[1]
-            ngx.log(ngx.WARN, "Json format error!", data)
-            ngx.var.target = hosts_post[1]
-            ngx.log(ngx.INFO, "[ weibo default ] turn to ===> ", hosts_post[1])
-        else
-            local target_url = get_wechatid_route(data_json['receiver_id'])
-            if target_url ~= nil then
-                -- 如果存在，跳转到对应缓存中的url
-                ngx.var.target = target_url
-                ngx.log(ngx.INFO, "["..data_json['receiver_id'].."] ===> ", target_url)
-                --ngx.say("["..wechatid.."] ===> ", target_url)
-            else
-                local sender_ascii = ascii_count(data_json['sender_id'])
-                local mod = sender_ascii % table.getn(hosts_post) + 1
-                ngx.var.target = hosts_post[mod]
-                ngx.log(ngx.INFO, "["..data_json['receiver_id'].."] ===> ", hosts_post[mod])
-            end
+            return true
         end
+    end
+    return false
+
+end
+
+function resolve_url_sdk(url)
+    -- 解析如果url中存在openid，
+    -- 缓存中存在openid，跳转到缓存的url
+    -- 否则返回false
+    local regex_weixin_sdk = [[/agent/weixin.*?[&\?]openid=([\w-]+)]]
+    local match_weixin_sdk = ngx.re.match(uri, regex_weixin_sdk, "o")
+
+    if match_weixin_sdk then
+        -- 2017-08-08 新增，如果url包含/agent/weixin 并且有openid参数，直接根据openid的值路由
     
+        local wechatid = match_weixin_sdk[1]
+        ngx.log(ngx.INFO, "SDK request --wechatid: ", wechatid)
+
+        -- 查找缓存中的wechatid是否存在        
+        local target_url = get_wechatid_route(wechatid)
+        if target_url ~= nil then
+            -- 如果存在，跳转到对应缓存中的url
+            ngx.var.target = target_url
+            ngx.log(ngx.INFO, "["..wechatid.."] ===> ", target_url)
+            --ngx.say("["..wechatid.."] ===> ", target_url)
+            return true
+        end
+    end
+    return false
+end
+
+function resolve_body_default(body)
+    -- 解析body默认逻辑
+    -- 如果存在FromUserName，那么解析计算ascii值，取模随机跳转到hosts_post对应的地址
+    -- 否则直接跳转到hosts_post[1]地址
+    local regex_body = [[<FromUserName>(.*?)</FromUserName>]]
+    local match_body = ngx.re.match(body, regex_body, "o")
+    if match_body then
+        local username = match_body[1]
+        ngx.log(ngx.WARN, "According to FromUserName ["..username.."] Ascii code to random!")
+        -- 根据username的ascii之和随机分配
+        local ascii = ascii_count(username)
+        local mod = ascii % table.getn(hosts_post) + 1
+        ngx.var.target = hosts_post[mod]
+        ngx.log(ngx.INFO, "["..username.."] ===> ", hosts_post[mod])
     else
         ngx.var.target = hosts_post[1]
-        ngx.log(ngx.INFO, "[ default 309 ] turn to ===> ", hosts_post[1])
+        ngx.log(ngx.INFO, "[ default ] ===> ", hosts_post[1])
     end
-elseif api_match_url then
-    ngx.log(ngx.INFO, "API get wechatid bind URL")
-    -- 提供api获取指定wechatid对应的路由url
-    local wechatid = api_match_url[1]
-    url = get_wechatid_route(wechatid)
-    if url == nil then
-        ngx.say("WechatID: ["..wechatid.."] Not found!")
+    return true
+end
+
+
+
+local regex_callback_url = [[/callback/(\w+)]]
+local match_callback_url = ngx.re.match(uri, regex_callback_url, "o")
+
+if match_callback_url then
+
+    local wechatid = match_callback_url[1]
+    target_url = get_wechatid_route(wechatid)
+    ngx.log(ngx.INFO, "--url: ", target_url)
+    
+    if target_url ~= nil then
+        -- 如果存在，跳转到对应缓存中的url
+        ngx.var.target = target_url
+        ngx.log(ngx.INFO, "["..wechatid.."] ===> ", target_url)
     else
-        ngx.say(url)
+        local ascii = ascii_count(wechatid)
+        local mod = ascii % table.getn(hosts_get) + 1
+        ngx.var.target = hosts_get[mod]
+        ngx.log(ngx.INFO, "["..wechatid.."] ===> ", hosts_get[mod])
     end
-    ngx.exit(200)
+elseif string.find(uri, '/agent/weibo') then
+    ngx.log(ngx.INFO, "微博请求")
+    -- 微博接口，判断/agent/weibo 将请求体json中的receiver_id 按缓存对应到VPC地址中
+    -- 如果receiver_id不在缓存中，按sender_id的ASCII值随机到不同的节点上
+    local data = ngx.req.get_body_data()
+    local data_json = json_decode(data)
+    if data_json == nil then
+        -- 判断json格式是否有误
+        -- 如果有误，直接跳转到hosts_post[1]
+        ngx.log(ngx.WARN, "Json format error!", data)
+        ngx.var.target = hosts_post[1]
+        ngx.log(ngx.INFO, "[ weibo default ] turn to ===> ", hosts_post[1])
+    else
+        local target_url = get_wechatid_route(data_json['receiver_id'])
+        if target_url ~= nil then
+            -- 如果存在，跳转到对应缓存中的url
+            ngx.var.target = target_url
+            ngx.log(ngx.INFO, "["..data_json['receiver_id'].."] ===> ", target_url)
+            --ngx.say("["..wechatid.."] ===> ", target_url)
+        else
+            local sender_ascii = ascii_count(data_json['sender_id'])
+            local mod = sender_ascii % table.getn(hosts_post) + 1
+            ngx.var.target = hosts_post[mod]
+            ngx.log(ngx.INFO, "["..data_json['receiver_id'].."] ===> ", hosts_post[mod])
+        end
+    end
+
+elseif string.find(uri, '/agent/weixin') then 
+
+    local data = ngx.req.get_body_data()
+        
+    if resolve_body_touser(data) then
+        -- 如果返回true，直接跳出lua程序
+        return
+    elseif resolve_url_sdk(uri) then
+        return
+    else
+        return resolve_body_default(data)
+    end
+elseif string.find(uri, '/agent/xcx') then 
+
+    local data = ngx.req.get_body_data()
+        
+    if resolve_body_touser(data) then
+        -- 如果返回true，直接跳出lua程序
+        return
+    else
+        return resolve_body_default(data)
+    end
 else
     ngx.var.target = hosts_post[1]
     ngx.log(ngx.INFO, "[ default ] ===> ", hosts_post[1])
