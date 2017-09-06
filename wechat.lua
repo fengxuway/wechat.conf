@@ -14,12 +14,12 @@ local expiretime = 1000
 
 
 function get_from_cache(key)
-    local cache_ngx = ngx.shared.openids
-    local value = cache_ngx:get(key)
-    return value
+    -- 读取nginx缓存的数据
+    return ngx.shared.openids:get(key)
 end
 
 function set_to_cache(key, value, exptime)
+    -- 将key和value写入缓存，过期时间为exptime
     if not exptime then
         exptime = 0
     end
@@ -30,6 +30,7 @@ function set_to_cache(key, value, exptime)
 end
 
 function delete_from_cache(key)
+    -- 从缓存中删除指定的值
     local cache_ngx = ngx.shared.openids
     local succ, err, forcible = cache_ngx:delete(key)
     ngx.log(ngx.INFO, "delete_from_cache", key)
@@ -42,6 +43,7 @@ end
 
 function ascii_count(wechatid)
     -- 计算一个字符串的每个字符串ascii总和，以便于随机
+    -- 如字符串“abc”，返回值为97+98+99之和
     local ascii = 0
     len = string.len(wechatid) 
     for i = 1, len do
@@ -52,6 +54,7 @@ end
 
 function json_decode(str)
     -- 异常捕获 json解析
+    -- 建议用这种方式代替cjson.decode直接调用，如果解析异常可捕获
     local cjson = require "cjson"
     local data = nil
     _, err = pcall(function(str) return cjson.decode(str) end, str)
@@ -62,6 +65,7 @@ function json_decode(str)
 end
 
 function redis_connect()
+    -- redis连接操作，如果连接成功，返回redis连接对象
     local redis = require "resty.redis"
     local red = redis:new()
     red:set_timeout(1000)
@@ -70,6 +74,7 @@ function redis_connect()
         ngx.log(ngx.ERR, "failed to connect: ", err)
         return
     end
+    -- 认证redis（redis需设置密码，否则lua库无法连接）
     local res, err = red:auth(redis_password)
     if not res then
         ngx.log(ngx.ERR, "failed to authenticate: ", err)
@@ -77,17 +82,24 @@ function redis_connect()
     end
     return red
 end
--- redis中key的前缀
+-- redis中key的前缀（以便于区分其他应用的key）
 local red_prefix = "openresty_openid_"
 function get_wechatid_route(wechatid)
+    -- 根据wechatid获取对应的URL
+
     ngx.log(ngx.INFO, "get_wechatid_route: [",wechatid,"]")
+    -- 首先从nginx缓存中读取
     url = get_from_cache(wechatid)
     if url == nil then
+        -- 如果nginx缓存中没有，那么检测nginx中是不是没有缓存
+        -- 如果没有缓存说明该nginx实例刚刚启动
+        -- 这时连接redis拷贝所有的缓存写入本地
         ngx.log(ngx.WARN, "openresty cache not found")
         if table.getn(get_keys()) == 0 then
     
             ngx.log(ngx.INFO, "load from redis...")
             red = redis_connect()
+            -- 读取redis中所有的缓存并遍历写入nginx缓存
             local all_keys = red:keys(red_prefix.."*")
             for i, k in ipairs(all_keys) do
                 local v = red:get(k)
@@ -109,8 +121,10 @@ end
 
 
 function sync(body)
+    -- 同步函数，向所有的nginx节点发送刚刚提交或删除的数据
     local http = require "resty.http"  
     local httpc = http.new()
+    -- 遍历hosts_nginx并向它发送请求
     for i, k in ipairs(hosts_nginx) do
          local res, err = httpc:request_uri(k..'/api/sync', {  
             method = "POST",  
@@ -126,12 +140,15 @@ function sync(body)
     end
 end
 
+-- 请求类型 GET or POST等
 local request_method = ngx.var.request_method
 
+-- 请求URL，以/开头
 local uri = ngx.var.request_uri
 --ngx.say(uri)
 ngx.log(ngx.ERR, uri)
 
+-- 默认的跳转目标，不过没什么用，防止逻辑漏掉
 ngx.var.target = hosts_get[1]
 
 if request_method == "POST" then
@@ -143,6 +160,7 @@ end
 
 -- 获取各个vpc推送上来的json数据，并写入缓存和redis中
 if uri == "/api/push" then
+    -- 请求体结构：{"openids": ["gh_111111", "gh_22222"], "url": "http://bj-v1.ntalker.com"}
     ngx.log(ngx.INFO, "ready to push data")
     local body = ngx.req.get_body_data()
     local data = json_decode(body)
@@ -153,7 +171,7 @@ if uri == "/api/push" then
     end
 
     red = redis_connect()
-
+    -- 遍历openids以"openid": "url"结构写入nginx和redis缓存
     for i,v in ipairs(data["openids"]) do
         set_to_cache(v, data["url"], expiretime)
         local res, err = red:set(red_prefix..v, data["url"])
@@ -164,7 +182,7 @@ if uri == "/api/push" then
         red:expire(red_prefix..v, expiretime_redis)
     end
     red:close()
-
+    -- 同步到其他nginx中
     sync(body)
 
     ngx.log(ngx.INFO, "Push Success")
@@ -174,6 +192,9 @@ if uri == "/api/push" then
 end
 
 if uri == "/api/delete" then
+    -- 删除一批openid
+    -- 由于线上openid失效时间是一年，所以如果有迁移回滚情况，需要移除已上传的openid，访问该url即可
+    -- body格式：{"openids": ["gh_111111", "gh_22222"]}
     ngx.log(ngx.INFO, "ready to delete cached data")
     local body = ngx.req.get_body_data()
     local data = json_decode(body)
@@ -185,7 +206,7 @@ if uri == "/api/delete" then
             red:expire(red_prefix..v, 1)
         end
         red:close()
-
+        -- 同步到其他nginx
         sync(body)
 
         ngx.log(ngx.INFO, "Push Success")
@@ -198,6 +219,7 @@ if uri == "/api/delete" then
 end
 
 if uri == "/api/sync" then
+    -- 接收到来自其他nginx的同步请求
     local body = ngx.req.get_body_data()
     ngx.log(ngx.INFO, body)
     local data = json_decode(body)
@@ -217,6 +239,7 @@ if uri == "/api/sync" then
     return
 end
 
+-- 查询指定wechatid对应的url的接口
 local api_regex_url = [[/api/openid/(\w+)]]
 local api_match_url = ngx.re.match(uri, api_regex_url, "o")
 if api_match_url then
